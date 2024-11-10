@@ -4,6 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Camera, AlertTriangle, Battery, Activity } from 'lucide-react';
 
+type CameraType = 'built-in' | 'continuity';
+
+interface CameraDevice {
+  id: string;
+  label: string;
+  type: CameraType;
+}
+
 const WildlifeDetectionInterface = () => {
   // System State Management
   const [systemState, setSystemState] = useState({
@@ -15,13 +23,18 @@ const WildlifeDetectionInterface = () => {
     lightCondition: 'unknown'
   });
 
-  // Detection Data Management
-  const [detectionData, setDetectionData] = useState([]);
-  const [analyticsData, setAnalyticsData] = useState({
-    totalDetections: 0,
-    detectionsByType: {},
-    hourlyActivity: Array(24).fill(0)
-  });
+ // Detection Data Management
+ const [detectionData, setDetectionData] = useState([]);
+ const [analyticsData, setAnalyticsData] = useState({
+   totalDetections: 0,
+   detectionsByType: {},
+   hourlyActivity: Array(24).fill(0)
+ });
+
+ // Add the new camera selection states here 👇
+ const [selectedCamera, setSelectedCamera] = useState<CameraType>('built-in');
+ const [availableCameras, setAvailableCameras] = useState<CameraDevice[]>([]);
+
 
   // Camera and Analysis References
   const videoRef = useRef(null);
@@ -31,27 +44,58 @@ const WildlifeDetectionInterface = () => {
   const analysisContextRef = useRef(null);
   const processingRef = useRef(false);
   const analysisIntervalRef = useRef(null);
-
-  // Camera Configuration
-  const cameraConfig = {
+// Camera Configuration
+const cameraConfig = {
     sensitivity: 20,
     minimumPixelDifference: 10,
     samplingInterval: 50,
     gridSize: 32
   };
 
+  // Add the detectCameras function here 👇
+  const detectCameras = async () => {
+    try {
+      console.log('Starting camera detection...');
+      await navigator.mediaDevices.getUserMedia({ video: true });
+      
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices
+        .filter(device => device.kind === 'videoinput')
+        .map(device => {
+          // Identify iPhone/Continuity camera by label
+          const isContinuity = device.label.toLowerCase().includes('iphone');
+          return {
+            id: device.deviceId,
+            label: device.label || 'Unknown Camera',
+            type: isContinuity ? 'continuity' : 'built-in'
+          };
+        });
+      
+      setAvailableCameras(videoDevices);
+    } catch (error) {
+      console.error('Camera detection error:', error);
+    }
+  };
+
   // Initialize camera with error handling
   const initializeCamera = async () => {
     try {
+      await detectCameras();
+      const selectedDevice = availableCameras.find(camera => camera.type === selectedCamera);
+  
+      if (!selectedDevice) {
+        throw new Error(`Camera type ${selectedCamera} not found`);
+      }
+  
       const constraints = {
         video: {
-          facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 }
+          deviceId: { exact: selectedDevice.id },
+          width: { ideal: selectedCamera === 'continuity' ? 3840 : 1920 },
+          height: { ideal: selectedCamera === 'continuity' ? 2160 : 1080 },
+          frameRate: { ideal: selectedCamera === 'continuity' ? 60 : 30 }
         }
       };
-
+  
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       
@@ -66,7 +110,16 @@ const WildlifeDetectionInterface = () => {
         };
       }
     } catch (error) {
-      console.error('Camera initialization failed:', error);
+      // Silently handle the error and try fallback
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (fallbackError) {
+        console.error('Fallback camera initialization failed:', fallbackError);
+      }
     }
   };
 
@@ -215,14 +268,21 @@ const WildlifeDetectionInterface = () => {
   };
 
   // Initialize camera when system becomes active
-  useEffect(() => {
+  // Update this useEffect
+useEffect(() => {
     if (systemState.isActive) {
+      cleanup();
       initializeCamera();
     } else {
       cleanup();
     }
     return cleanup;
-  }, [systemState.isActive]);
+  }, [systemState.isActive, selectedCamera]); // Add selectedCamera to dependencies
+
+  // Add this with your other useEffects
+useEffect(() => {
+    detectCameras();
+  }, []);
 
   // Battery simulation
   useEffect(() => {
@@ -267,38 +327,65 @@ const WildlifeDetectionInterface = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Camera Feed */}
-          <div className="bg-white rounded-lg shadow-lg p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-800">Detection Zone</h2>
-              <div className="flex items-center gap-2">
-                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                  streamRef.current 
-                    ? 'bg-green-100 text-green-800' 
-                    : 'bg-yellow-100 text-yellow-800'
-                }`}>
-                  {streamRef.current ? 'Camera Active' : 'Initializing...'}
-                </span>
-              </div>
-            </div>
-            <div className="relative aspect-video bg-gray-900 rounded-lg overflow-hidden">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
-              {!streamRef.current && (
-                <div className="absolute inset-0 flex items-center justify-center text-white">
-                  <p className="text-lg">Initializing Camera...</p>
-                </div>
-              )}
-              {detectionData.slice(-1)[0]?.confidence > 0.8 && (
-                <div className="absolute inset-0 border-4 border-red-500 animate-pulse" />
-              )}
-            </div>
-          </div>
-
+<div className="bg-white rounded-lg shadow-lg p-4">
+  <div className="flex items-center justify-between mb-4">
+    <h2 className="text-xl font-bold text-gray-800">Detection Zone</h2>
+    <div className="flex items-center gap-4">
+      {/* Camera Selection Controls */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => {
+            setSelectedCamera('built-in');
+            if (streamRef.current) {
+              cleanup();
+              initializeCamera();
+            }
+          }}
+          className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+            selectedCamera === 'built-in'
+              ? 'bg-blue-500 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          MacBook Camera
+        </button>
+        <button
+          onClick={() => {
+            setSelectedCamera('continuity');
+            if (streamRef.current) {
+              cleanup();
+              initializeCamera();
+            }
+          }}
+          className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+            selectedCamera === 'continuity'
+              ? 'bg-blue-500 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          Continuity Camera
+        </button>
+      </div>
+    </div>
+  </div>
+  <div className="relative aspect-video bg-gray-900 rounded-lg overflow-hidden">
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      className="w-full h-full object-cover"
+    />
+    {!streamRef.current && (
+      <div className="absolute inset-0 flex items-center justify-center text-white">
+        <p className="text-lg">Initializing Camera...</p>
+      </div>
+    )}
+    {detectionData.slice(-1)[0]?.confidence > 0.8 && (
+      <div className="absolute inset-0 border-4 border-red-500 animate-pulse" />
+    )}
+  </div>
+</div>
           {/* Activity Graph */}
           <div className="bg-white rounded-lg shadow-lg p-4">
             <h2 className="text-xl font-bold text-gray-800 mb-4">Activity Monitor</h2>
